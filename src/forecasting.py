@@ -177,11 +177,12 @@ def rmse(actual: list[float], predicted: list[float]) -> float:
     return math.sqrt(squared_error)
 
 
-def mape(actual: list[float], predicted: list[float]) -> float:
-    non_zero_pairs = [(a, p) for a, p in zip(actual, predicted) if a != 0]
-    if not non_zero_pairs:
-        return 0.0
-    return sum(abs(a - p) / a for a, p in non_zero_pairs) * 100 / len(non_zero_pairs)
+def wape(actual: list[float], predicted: list[float]) -> float:
+    absolute_error = sum(abs(a - p) for a, p in zip(actual, predicted))
+    total_actual = sum(abs(a) for a in actual)
+    if total_actual == 0:
+        return 0.0 if absolute_error == 0 else float("inf")
+    return (absolute_error / total_actual) * 100
 
 
 def format_number(value: object) -> str:
@@ -232,14 +233,14 @@ def evaluate_target(target: str, series: list[float], dates: list[date]) -> tupl
             "model": "Seasonal Naive",
             "mae": round(mae(test, baseline_predictions), 2),
             "rmse": round(rmse(test, baseline_predictions), 2),
-            "mape": round(mape(test, baseline_predictions), 2),
+            "wape": round(wape(test, baseline_predictions), 2),
         },
         {
             "target": target,
             "model": "Holt-Winters",
             "mae": round(mae(test, hw_predictions), 2),
             "rmse": round(rmse(test, hw_predictions), 2),
-            "mape": round(mape(test, hw_predictions), 2),
+            "wape": round(wape(test, hw_predictions), 2),
         },
     ]
 
@@ -290,7 +291,7 @@ def main() -> None:
     print(f"  Future horizon: next {FORECAST_DAYS} days")
 
     print("\nModel evaluation:")
-    print(render_table(metrics, ["target", "model", "mae", "rmse", "mape"]))
+    print(render_table(metrics, ["target", "model", "mae", "rmse", "wape"]))
 
     print("\n30-day forecast summary:")
     print(render_table(summaries, ["target", "selected_model", "30_day_total_forecast", "average_daily_forecast", "peak_day_forecast"]))
