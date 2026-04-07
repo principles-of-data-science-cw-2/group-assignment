@@ -1,3 +1,5 @@
+"""Forecast short-term retail demand using seasonal baseline and Holt-Winters models."""
+
 from __future__ import annotations
 
 import csv
@@ -18,6 +20,8 @@ SMOOTHING_GRID = [0.2, 0.4, 0.6, 0.8]
 
 @dataclass
 class HoltWintersState:
+    """Store fitted Holt-Winters smoothing parameters and final state."""
+
     alpha: float
     beta: float
     gamma: float
@@ -28,6 +32,8 @@ class HoltWintersState:
 
 
 def load_daily_targets(data_path: Path) -> tuple[list[date], dict[str, list[float]]]:
+    """Aggregate the cleaned transaction file into daily revenue and order-volume series."""
+
     required_columns = {
         "Invoice",
         "InvoiceDate",
@@ -79,6 +85,8 @@ def load_daily_targets(data_path: Path) -> tuple[list[date], dict[str, list[floa
 
 
 def initial_trend(series: list[float], seasonal_periods: int) -> float:
+    """Estimate the starting trend from the first two seasonal cycles."""
+
     return sum(
         (series[i + seasonal_periods] - series[i]) / seasonal_periods
         for i in range(seasonal_periods)
@@ -86,6 +94,8 @@ def initial_trend(series: list[float], seasonal_periods: int) -> float:
 
 
 def initial_seasonals(series: list[float], seasonal_periods: int) -> list[float]:
+    """Estimate the additive seasonal offsets used to initialize Holt-Winters."""
+
     season_count = len(series) // seasonal_periods
     season_averages = []
     for season_index in range(season_count):
@@ -111,6 +121,8 @@ def fit_additive_holt_winters(
     beta: float,
     gamma: float,
 ) -> HoltWintersState:
+    """Fit an additive Holt-Winters model for a single target series."""
+
     if len(series) < seasonal_periods * 2:
         raise ValueError("At least two full seasons are required for Holt-Winters.")
 
@@ -136,6 +148,8 @@ def fit_additive_holt_winters(
 
 
 def optimize_holt_winters(series: list[float], seasonal_periods: int) -> HoltWintersState:
+    """Select the best Holt-Winters state from a small smoothing-parameter grid."""
+
     best_state: HoltWintersState | None = None
     for alpha in SMOOTHING_GRID:
         for beta in SMOOTHING_GRID:
@@ -155,6 +169,8 @@ def forecast_from_state(
     seasonal_periods: int,
     observed_length: int,
 ) -> list[float]:
+    """Project future values from a fitted Holt-Winters state."""
+
     forecasts = []
     for step in range(horizon):
         seasonal_component = state.seasonals[(observed_length + step) % seasonal_periods]
@@ -164,20 +180,28 @@ def forecast_from_state(
 
 
 def seasonal_naive_forecast(train: list[float], horizon: int, seasonal_periods: int) -> list[float]:
+    """Repeat the most recent seasonal pattern as a baseline forecast."""
+
     pattern = train[-seasonal_periods:]
     return [max(0.0, pattern[index % seasonal_periods]) for index in range(horizon)]
 
 
 def mae(actual: list[float], predicted: list[float]) -> float:
+    """Calculate mean absolute error."""
+
     return sum(abs(a - p) for a, p in zip(actual, predicted)) / len(actual)
 
 
 def rmse(actual: list[float], predicted: list[float]) -> float:
+    """Calculate root mean squared error."""
+
     squared_error = sum((a - p) ** 2 for a, p in zip(actual, predicted)) / len(actual)
     return math.sqrt(squared_error)
 
 
 def wape(actual: list[float], predicted: list[float]) -> float:
+    """Calculate weighted absolute percentage error as a percentage."""
+
     absolute_error = sum(abs(a - p) for a, p in zip(actual, predicted))
     total_actual = sum(abs(a) for a in actual)
     if total_actual == 0:
@@ -186,12 +210,16 @@ def wape(actual: list[float], predicted: list[float]) -> float:
 
 
 def format_number(value: object) -> str:
+    """Format numbers consistently for plain-text table output."""
+
     if isinstance(value, float):
         return f"{value:.2f}"
     return str(value)
 
 
 def render_table(rows: list[dict[str, object]], headers: list[str]) -> str:
+    """Render a list of dictionaries as a simple aligned text table."""
+
     widths = []
     for header in headers:
         max_cell_width = max(len(format_number(row[header])) for row in rows)
@@ -207,6 +235,8 @@ def render_table(rows: list[dict[str, object]], headers: list[str]) -> str:
 
 
 def summarize_forecast(target: str, model: str, values: list[float]) -> dict[str, object]:
+    """Create headline summary statistics for a selected forecast."""
+
     return {
         "target": target,
         "selected_model": model,
@@ -217,6 +247,8 @@ def summarize_forecast(target: str, model: str, values: list[float]) -> dict[str
 
 
 def evaluate_target(target: str, series: list[float], dates: list[date]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Evaluate competing models for one target and return future forecasts."""
+
     if len(series) <= TEST_DAYS + SEASONAL_PERIODS * 2:
         raise ValueError(f"Not enough history to forecast {target}.")
 
@@ -266,6 +298,8 @@ def evaluate_target(target: str, series: list[float], dates: list[date]) -> tupl
 
 
 def main() -> None:
+    """Run the forecasting workflow and print evaluation and forecast summaries."""
+
     dates, targets = load_daily_targets(DATA_PATH)
 
     metrics: list[dict[str, object]] = []
