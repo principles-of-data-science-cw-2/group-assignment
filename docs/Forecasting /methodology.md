@@ -1,66 +1,151 @@
 # Forecasting Methodology
 
-## Objective
-The forecasting task predicts short-term operational trends from the cleaned retail transaction dataset. Two daily targets are modeled because they support both financial and operational decisions:
+## Purpose
+`src/forecasting.py` builds a short-term daily forecasting workflow for two targets:
 
-- `daily_revenue`: total sales revenue per day.
-- `daily_order_volume`: number of unique invoices processed per day.
+- `daily_revenue`
+- `daily_order_volume`
 
-## Data Preparation
-The model uses `data/cleaned_retail_data.csv`, which already contains cleaned transaction records and a derived `Total_Revenue` field. For forecasting:
+The script compares a simple baseline against a supervised model, selects the lower-error option for each target, and produces a 30-day forward forecast.
 
-1. `InvoiceDate` is parsed as a timestamp.
-2. Transactions are aggregated to a daily grain.
-3. Missing calendar days are retained and filled with zero activity.
+## Input Data And Daily Feature Construction
+The workflow reads `data/cleaned_retail_data.csv` and requires these columns:
 
-Keeping zero-activity days matters because the dataset shows a recurring no-trade Saturday pattern. Removing those dates would hide a real operational rhythm and weaken weekly seasonality detection.
+- `Invoice`
+- `InvoiceDate`
+- `Total_Revenue`
+- `Quantity`
+- `Price`
+- `Customer ID`
+- `StockCode`
+- `Country`
 
-## Modeling Approach
-The script in `src/forecasting.py` evaluates two time-series forecasting approaches:
+The script parses `InvoiceDate`, aggregates transaction rows to one record per calendar day, and then fills every date between the first and last observed day. Dates with no transactions are kept as zero-activity days.
 
-- `Seasonal Naive`: repeats the most recent 7-day demand pattern
-- `Holt-Winters`: additive trend plus additive weekly seasonality with a 7-day period
+Each daily record contains:
 
-This approach was selected because:
+- `daily_revenue`: sum of `Total_Revenue`
+- `daily_order_volume`: count of unique invoices
+- `line_count`: number of transaction rows
+- `daily_quantity`: sum of `Quantity`
+- `unique_customers`: count of non-empty customer IDs
+- `unique_stockcodes`: count of non-empty stock codes
+- `avg_unit_price`: total `Price` divided by `line_count` with zero-safe handling
+- `guest_checkout_ratio`: share of daily lines without a valid customer ID
+- `active_hours_count`: number of active invoice hours in the day
+- `revenue_per_line`: daily revenue divided by line count
+- `quantity_per_order`: daily quantity divided by order volume
+- `median_order_value`: median invoice revenue for the day
+- `max_order_value`: largest invoice revenue for the day
+- `large_order_count`: number of invoices above the configured large-order threshold
+- `top5_product_revenue_share`: share of revenue captured by the top five stock codes
+- `product_herfindahl`: concentration of product revenue within the day
+- `uk_revenue_share`: share of revenue from `United Kingdom`
+- `international_country_count`: number of non-UK countries active that day
+- `top_country_concentration`: share of revenue contributed by the leading country
+- `new_customer_count`: count of first-seen customers on that day
+- `returning_customer_ratio`: share of known customers among identified customers
+- `morning_revenue_share`: share of daily revenue booked between 06:00 and 11:59
+- `afternoon_revenue_share`: share of daily revenue booked between 12:00 and 17:59
 
-- the dataset covers about one year, which is too short for reliable multi-year seasonal modeling;
-- the series is continuous enough at the daily level to learn short-horizon weekly demand patterns;
-- the business question is operational, so interpretable short-term forecasts are more useful than a highly complex model.
+## Forecasting Models
+The script evaluates two models:
 
-The script scores both models on a holdout window and uses the lower-RMSE model for the forward 30-day forecast. On this dataset, the simpler weekly seasonal-naive model performed better than Holt-Winters for both targets, so it is the recommended operational forecast.
+- `Seasonal Naive`: repeats the latest 7-day pattern
+- `Gradient Boosting`: uses `HistGradientBoostingRegressor`
 
-## Validation Strategy
-Time-series data cannot be shuffled without leaking future information into the past. The validation design therefore uses a chronological split:
+The supervised path models not only the two targets but also these supporting series:
 
-- training set: all observations except the final 30 days
-- test set: the most recent 30 days
+- `line_count`
+- `daily_quantity`
+- `unique_customers`
+- `unique_stockcodes`
+- `avg_unit_price`
+- `guest_checkout_ratio`
+- `active_hours_count`
+- `revenue_per_line`
+- `quantity_per_order`
+- `median_order_value`
+- `max_order_value`
+- `large_order_count`
+- `top5_product_revenue_share`
+- `product_herfindahl`
+- `uk_revenue_share`
+- `international_country_count`
+- `top_country_concentration`
+- `new_customer_count`
+- `returning_customer_ratio`
+- `morning_revenue_share`
+- `afternoon_revenue_share`
 
-The model is fit on the training period, forecasts the next 30 days, and is then scored against the held-out test window.
+This allows the future feature rows to be built from recursively forecast supporting signals instead of from unknown future values.
 
-## Evaluation Metrics
-The forecasting script reports:
+## Feature Engineering
+The gradient-boosting feature row contains calendar features:
 
-- `MAE`: average absolute forecast error in the original unit
-- `RMSE`: penalizes larger misses more heavily than MAE
-- `WAPE`: expresses total absolute error as a percentage of total actual volume and remains stable when some days have zero activity
+- day of week
+- day of month
+- day of year
+- ISO week of year
+- month
+- quarter
+- weekend flag
+- month-start flag
+- month-end flag
+- sine and cosine encodings for weekday
+- sine and cosine encodings for month
 
-`Accuracy` is not the primary metric here because the targets are continuous regression outputs rather than class labels. `MAPE` was not retained because the project intentionally keeps zero-activity days in the series, which makes per-row percentage error unstable and potentially misleading.
+It also contains lag and rolling-window features for every modeled series:
 
-## Observed Performance
-Holdout evaluation on the last 30 days produced these results:
+- lags at `1`, `7`, `14`, and `28` days
+- rolling means over `7` and `28` days
+- rolling standard deviations over `7` and `28` days
 
-- `daily_revenue` Seasonal Naive: MAE `5822.61`, RMSE `8048.46`, WAPE `27.42%`
-- `daily_revenue` Holt-Winters: MAE `13193.88`, RMSE `15816.71`, WAPE `62.14%`
-- `daily_order_volume` Seasonal Naive: MAE `14.70`, RMSE `19.06`, WAPE `17.84%`
-- `daily_order_volume` Holt-Winters: MAE `56.81`, RMSE `67.30`, WAPE `68.94%`
+An additional derived series, `avg_order_value`, is computed as `daily_revenue / daily_order_volume` with zero-safe division and included through the same lag and rolling-window pattern.
 
-These results indicate that the recent weekly trading pattern is a stronger short-term predictor than a trend-plus-seasonality model trained on the available history.
+## Training, Validation, And Selection
+The workflow uses a chronological holdout:
 
-## Operational Use
-These forecasts can support:
+- training period: all daily observations except the final 30 days
+- test period: the final 30 days
 
-- staffing plans by estimating daily order-processing pressure
-- inventory and replenishment timing by anticipating short-term sales movement
-- cash-flow and promotion planning by projecting near-term revenue patterns
+The baseline model forecasts the test window by repeating the latest weekly pattern from the training period. The supervised model is trained on expanding historical windows and forecasts recursively for the same 30-day holdout horizon.
 
-The 30-day horizon is intentionally conservative because it is more actionable for operational teams and more defensible given the available history.
+For each target, the script computes:
+
+- `MAE`
+- `RMSE`
+- `WAPE`
+
+Model selection is target-specific:
+
+- choose the model with the lowest `RMSE`
+- break ties with lower `MAE`
+
+The selected model for each target is then used to create the next 30 days of dated forecast rows.
+
+## Workflow Outputs
+`run_forecasting_workflow()` returns a dictionary containing:
+
+- source row count
+- aggregated daily records
+- target series
+- per-model holdout metrics
+- selected future forecast rows
+- summary rows
+- comparison payloads for plotting
+- a 7-row preview per target
+
+When `main()` runs, the script also:
+
+- prints the forecasting window summary
+- prints the model evaluation table
+- prints the 30-day forecast summary table
+- prints the first 7 forecasted days per target
+- saves three PNG files under `outputs/forecasting`
+
+The saved plots are:
+
+- `model_metric_comparison.png`
+- `holdout_comparison.png`
+- `future_forecast_comparison.png`
